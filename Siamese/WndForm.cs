@@ -27,7 +27,9 @@ namespace Siamese
 
         HashSet<string> FilteredExtensions;
 
-        
+        BackgroundWorker BgComparer;
+
+        WndProgress WndProgress;
 
         public WndForm()
         {
@@ -38,12 +40,65 @@ namespace Siamese
             typeof(Control).GetProperty("DoubleBuffered", BindingFlags.NonPublic | BindingFlags.Instance)
                .SetValue(DataGridResults, true, null);
 
+            WndProgress = new WndProgress("Please wait...");
 
             FilteredExtensions = new HashSet<string>();
 
             //DataGridResults.DataTable
+            BgComparer = new BackgroundWorker();
+            BgComparer.DoWork += BgComparer_DoWork;
+            BgComparer.RunWorkerCompleted += BgComparer_RunWorkerCompleted;
+            BgComparer.WorkerReportsProgress = true;
+            BgComparer.WorkerSupportsCancellation = true;
 
+        }
+
+        private void BgComparer_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
+        {
+            Invoke((Action) (() => WndProgress.CloseWindow()));
+            Console.WriteLine("BgComparer_RunWorkerCompleted");
             
+        }
+
+        private void LoadAsyncCommand(string title, dynamic obj)
+        {
+            if(!BgComparer.IsBusy)
+            {
+                BgComparer.RunWorkerAsync(obj);
+                var dlgResult = WndProgress.ShowDialog(this);
+                if(dlgResult == DialogResult.Cancel)
+                {
+                    BgComparer.CancelAsync();
+                }
+        }
+        }
+
+        private void BgComparer_DoWork(object sender, DoWorkEventArgs e)
+        {
+            try
+            {
+                var bg = (BackgroundWorker)sender;
+
+                dynamic obj = e.Argument;
+
+                if (obj.command == "CREATE_SNAPSHOT")
+                {
+                    SourceSnapshot = Snapshot.CreateFromPath(obj.targetFolder, (Func<bool>)(() => BgComparer.CancellationPending));
+                    SourceSnapshot.Serialize(obj.fileName);
+                }
+                else if(obj.command == "LOAD_SNAPSHOT")
+                {
+                    // at this point we need to queue up the snapshot
+                    SourceSnapshot = Snapshot.Deserialize(obj.fileName);
+                    Invoke((Action)(() => SnapshotFile = obj.fileName));
+                }
+            } 
+            catch(Exception)
+            {
+
+            }
+
+            e.Result = true;
 
         }
 
@@ -99,9 +154,7 @@ namespace Siamese
 
                 if (fd.ShowDialog(this) == DialogResult.OK)
                 {
-                    // at this point we need to queue up the snapshot
-                    SourceSnapshot = Snapshot.Deserialize(fd.FileName);
-                    SnapshotFile = fd.FileName;
+                    LoadAsyncCommand("Loading snapshot", new { command = "LOAD_SNAPSHOT", fileName = fd.FileName });
                 }
             }
         }
@@ -154,7 +207,9 @@ namespace Siamese
                 }
                 else if (MessageBox.Show(this, "You have not selected a snapshot file, do you want to create one now?", this.Text, MessageBoxButtons.YesNo) == DialogResult.Yes)
                 {
+                    DataGridResults.DataSource = null;
                     DataGridResults.Rows.Clear();
+
 
                     using (var fd = new SaveFileDialog { Filter = "Snapshot files (*.snp)|*.snp|All files (*.*)|*.*" })
                     {
@@ -162,9 +217,17 @@ namespace Siamese
                         if (fd.ShowDialog(this) == DialogResult.OK)
                         {
                             SnapshotFile = fd.FileName;
-                            SourceSnapshot = Snapshot.CreateFromPath(TargetFolder);
-                            SourceSnapshot.Serialize(fd.FileName);
-                            MessageBox.Show(this, $"Snapshot file created from {TargetFolder}, total files examined: {SourceSnapshot.Count}", this.Text);
+                            BgComparer.RunWorkerAsync(new { command = "CREATE_SNAPSHOT", fileName = fd.FileName, targetFolder = TargetFolder });
+                            var dialogResult = WndProgress.ShowDialog(this);
+                            if (dialogResult == DialogResult.Cancel)
+                            {
+                                BgComparer.CancelAsync();
+                                MessageBox.Show(this, $"Snapshot file failed to create from {TargetFolder}", this.Text);
+                            }
+                            else
+                            {
+                                MessageBox.Show(this, $"Snapshot file created from {TargetFolder}, total files examined: {SourceSnapshot.Count}", this.Text);
+                            }
                         }
                     }
                 }

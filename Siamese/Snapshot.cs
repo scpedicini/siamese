@@ -71,6 +71,7 @@ namespace Siamese
     [Serializable]
     public class Snapshot
     {
+
         public string RootPath;
 
         private Dictionary<string, Snapfile> RelNameToSnapfile;
@@ -123,7 +124,7 @@ namespace Siamese
             return Path.Combine(RootPath, relname);
         }
 
-        public static Snapshot CreateFromPath(string rootPath)
+        public static Snapshot CreateFromPath(string rootPath, Func<bool> cancellationRequested = null)
         {
             rootPath = rootPath.ToLowerInvariant().Trim();
 
@@ -139,7 +140,11 @@ namespace Siamese
 
             foreach(var f in fse)
             {
-                
+                if (cancellationRequested != null && cancellationRequested())
+                {
+                    throw new TaskCanceledException("User cancelled creating serialized path analysis");
+                }
+
                 // both DirectoryInfo and FileInfo inherit from FileSystemInfo which is what the FileSystemEnumerable returns
                 if( f as FileInfo is var finfo && finfo != null )
                 {
